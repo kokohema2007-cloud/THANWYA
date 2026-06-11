@@ -1,9 +1,7 @@
-import { SEED_CODES, SEED_CONTENT, SEED_EXAMS } from './data.js';
-import { normalizeTeacherLibrary } from './libraryFolders.js';
+import { SEED_CONTENT, SEED_EXAMS } from './data.js';
 import { createSeedLibrary } from './studentLibrary.js';
-import { localTeacherImageFor } from './teacherImages.js';
-import { getStoredSession } from './authSession.js';
 import { buildApiUrl, getAuthToken } from './serverApi.js';
+import { getStoredSession } from './authSession.js';
 
 const KEYS = {
   codes: 'thanwya.codes',
@@ -17,7 +15,7 @@ const KEYS = {
 const REMOTE_KEYS = Object.values(KEYS);
 
 function shouldRepairText(value) {
-  return /[ØÙÃÂð\u00bf]/.test(value);
+  return /[Ã˜Ã™ÃƒÃ‚Ã°\u00bf]/.test(value);
 }
 
 function repairText(value) {
@@ -40,7 +38,6 @@ function normalizeValue(value) {
 
 function migrateCodes(codes) {
   if (!Array.isArray(codes)) return codes;
-
   return codes.filter((code) => {
     const id = String(code?.id ?? '').trim().toLowerCase();
     const value = String(code?.value ?? '').trim().toLowerCase();
@@ -48,48 +45,80 @@ function migrateCodes(codes) {
   });
 }
 
+function createDefaultCache() {
+  return new Map([
+    [KEYS.codes, []],
+    [KEYS.lessonCodes, []],
+    [KEYS.content, SEED_CONTENT],
+    [KEYS.exams, SEED_EXAMS],
+    [KEYS.library, createSeedLibrary()],
+    [KEYS.theme, 'light'],
+  ]);
+}
+
+const storeCache = createDefaultCache();
+
+function setCacheFromStore(store) {
+  if (!store || typeof store !== 'object') return;
+  for (const key of REMOTE_KEYS) {
+    if (store[key] == null) continue;
+    const value = key === KEYS.codes ? migrateCodes(normalizeValue(store[key])) : normalizeValue(store[key]);
+    storeCache.set(key, value);
+  }
+}
+
+function cacheSnapshot() {
+  return REMOTE_KEYS.reduce((acc, key) => {
+    acc[key] = storeCache.get(key);
+    return acc;
+  }, {});
+}
+
 function hasRemoteApi() {
   return typeof window !== 'undefined' && typeof fetch === 'function';
 }
 
 export function loadStore(key, fallback) {
-  try {
-    const stored = localStorage.getItem(key);
-    return stored ? normalizeValue(JSON.parse(stored)) : fallback;
-  } catch {
-    return fallback;
-  }
+  return storeCache.has(key) ? storeCache.get(key) : fallback;
 }
 
 export function saveStore(key, value, { syncRemote = true } = {}) {
   const normalized = normalizeValue(value);
-  localStorage.setItem(key, JSON.stringify(normalized));
-  if (syncRemote) void syncStoreToRemote();
+  storeCache.set(key, normalized);
+  if (syncRemote) void syncStoreToRemote(key, normalized).catch(() => {});
 }
 
-function readLocalSnapshot() {
-  return REMOTE_KEYS.reduce((acc, key) => {
-    acc[key] = loadStore(key, null);
-    return acc;
-  }, {});
-}
-
-export async function syncStoreToRemote() {
+export async function syncStoreToRemote(key, value) {
   if (!hasRemoteApi()) return;
   if (getStoredSession()?.role !== 'admin') return;
   const token = getAuthToken();
   if (!token) return;
+
+  const patch = key ? { [key]: value } : cacheSnapshot();
+  await fetch(buildApiUrl('/api/admin/store'), {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function hydratePublicStore() {
+  if (!hasRemoteApi()) return null;
   try {
-    await fetch(buildApiUrl('/api/admin/store'), {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(normalizeValue(readLocalSnapshot())),
+    const response = await fetch(buildApiUrl('/api/public/state'));
+    if (!response.ok) return null;
+    const remoteStore = await response.json();
+    console.info('[exam-flow] public-state-response', {
+      ok: response.ok,
+      subjectCount: Array.isArray(remoteStore?.[KEYS.library]) ? remoteStore[KEYS.library].length : 0,
     });
+    setCacheFromStore(remoteStore);
+    return remoteStore;
   } catch {
-    console.warn('Failed to sync admin store to remote');
+    return null;
   }
 }
 
@@ -104,71 +133,15 @@ export async function hydrateStoreFromRemote() {
     });
     if (!response.ok) return null;
     const remoteStore = await response.json();
-    for (const key of REMOTE_KEYS) {
-      if (remoteStore?.[key] != null) {
-        const value = key === KEYS.codes ? migrateCodes(normalizeValue(remoteStore[key])) : normalizeValue(remoteStore[key]);
-        localStorage.setItem(key, JSON.stringify(value));
-      }
-    }
+    setCacheFromStore(remoteStore);
     return remoteStore;
   } catch {
-    console.warn('Failed to hydrate admin store from remote');
     return null;
   }
 }
 
 export function bootstrapStore() {
-  if (!localStorage.getItem(KEYS.codes)) saveStore(KEYS.codes, SEED_CODES, { syncRemote: false });
-  if (!localStorage.getItem(KEYS.lessonCodes)) saveStore(KEYS.lessonCodes, [], { syncRemote: false });
-  if (!localStorage.getItem(KEYS.content)) saveStore(KEYS.content, SEED_CONTENT, { syncRemote: false });
-  if (!localStorage.getItem(KEYS.exams)) saveStore(KEYS.exams, SEED_EXAMS, { syncRemote: false });
-
-  const codes = loadStore(KEYS.codes, []);
-  const migratedCodes = migrateCodes(codes);
-  if (JSON.stringify(migratedCodes) !== JSON.stringify(codes)) {
-    saveStore(KEYS.codes, migratedCodes, { syncRemote: false });
-  }
-
-  const seedLibrary = createSeedLibrary();
-  const library = loadStore(KEYS.library, null);
-  if (!library) {
-    saveStore(KEYS.library, seedLibrary, { syncRemote: false });
-    return;
-  }
-
-  const migrated = library.map((subject) => ({
-    ...subject,
-    teachers: subject.teachers.map((teacher) =>
-      normalizeTeacherLibrary({
-        ...teacher,
-        image: localTeacherImageFor(teacher.name) ?? teacher.image,
-      }),
-    ),
-  }));
-
-  const chemistry = migrated.find((subject) => subject.name === 'كيمياء');
-  if (chemistry && !chemistry.teachers.some((teacher) => teacher.name === 'Ashraf ElShenawy')) {
-    chemistry.teachers.push({
-      id: 'kimeya-ashraf-elshenawy',
-      name: 'Ashraf ElShenawy',
-      role: 'مدرس المادة',
-      image: '/teacher-images/Ashraf ElShenawy.png',
-      lessons: chemistry.teachers[0]?.lessons ? chemistry.teachers[0].lessons.map((lesson) => ({
-        ...lesson,
-        id: lesson.id.replace(/^[^-]+/, 'ashraf'),
-        title: lesson.title,
-        children: Array.isArray(lesson.children) ? lesson.children : [],
-      })) : [],
-    });
-  }
-
-  for (const seedSubject of seedLibrary) {
-    if (!migrated.some((subject) => subject.name === seedSubject.name)) {
-      migrated.push(seedSubject);
-    }
-  }
-
-  saveStore(KEYS.library, migrated, { syncRemote: false });
+  return null;
 }
 
 export { KEYS };

@@ -2,7 +2,6 @@ const AUTH_SESSION_KEY = 'thanwya.authSession';
 
 function getStorage() {
   if (typeof sessionStorage !== 'undefined') return sessionStorage;
-  if (typeof localStorage !== 'undefined') return localStorage;
   return null;
 }
 

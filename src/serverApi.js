@@ -92,7 +92,21 @@ export async function fetchStudentAccess() {
 }
 
 export async function requestVideoAccess(assetId) {
-  return requestJson(`/api/uploads/video/${encodeURIComponent(assetId)}/access`);
+  console.info('[video-flow] ticket-request-started', { assetId });
+  const data = await requestJson(`/api/uploads/video/${encodeURIComponent(assetId)}/access`);
+  return {
+    ...data,
+    url: data?.url ? buildApiUrl(data.url) : '',
+  };
+}
+
+export async function requestPdfAccess(assetId) {
+  console.info('[pdf-flow] ticket-request-started', { assetId });
+  const data = await requestJson(`/api/uploads/pdf/${encodeURIComponent(assetId)}/access`);
+  return {
+    ...data,
+    url: data?.url ? buildApiUrl(data.url) : '',
+  };
 }
 
 export async function refreshAuthSession() {

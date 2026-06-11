@@ -1,21 +1,20 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
-import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
-import { copyFile, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createSeedLibrary } from '../src/studentLibrary.js';
+import { SEED_CODES, SEED_CONTENT, SEED_EXAMS } from '../src/data.js';
+import { ensureExamQuestionsData } from '../src/examTools.js';
+import { TEACHER_IMAGE_ASSET_MANIFEST, teacherImageAssetIdFor, teacherImageUrlForAsset } from '../src/teacherImages.js';
+import { deleteAsset, initDb, readAsset, readState, writeAsset, writeState } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
-const configuredDataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, 'data');
-const uploadsDir = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.join(__dirname, 'uploads', 'videos');
-const storePath = process.env.STORE_FILE_PATH ? path.resolve(process.env.STORE_FILE_PATH) : path.join(configuredDataDir, 'store.json');
-const dataDir = path.dirname(storePath);
-const storeBackupPath = `${storePath}.bak`;
-const storeTempPath = `${storePath}.tmp`;
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const IS_PRODUCTION = NODE_ENV === 'production';
@@ -31,19 +30,21 @@ const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || '2mb';
 const UPLOAD_MAX_BYTES = readPositiveInt('UPLOAD_MAX_BYTES', 1024 * 1024 * 512);
 const UPLOAD_ALLOWED_EXTENSIONS = parseCsv(process.env.UPLOAD_ALLOWED_EXTENSIONS || '.mp4,.webm,.mov').map((item) => item.toLowerCase());
 const UPLOAD_ALLOWED_MIME_TYPES = parseCsv(process.env.UPLOAD_ALLOWED_MIME_TYPES || 'video/mp4,video/webm,video/quicktime').map((item) => item.toLowerCase());
+const PDF_ALLOWED_EXTENSIONS = parseCsv(process.env.PDF_ALLOWED_EXTENSIONS || '.pdf').map((item) => item.toLowerCase());
+const PDF_ALLOWED_MIME_TYPES = parseCsv(process.env.PDF_ALLOWED_MIME_TYPES || 'application/pdf').map((item) => item.toLowerCase());
+const IMAGE_ALLOWED_EXTENSIONS = parseCsv(process.env.IMAGE_ALLOWED_EXTENSIONS || '.png,.jpg,.jpeg,.webp').map((item) => item.toLowerCase());
+const IMAGE_ALLOWED_MIME_TYPES = parseCsv(process.env.IMAGE_ALLOWED_MIME_TYPES || 'image/png,image/jpeg,image/webp').map((item) => item.toLowerCase());
 const CORS_ORIGINS = parseOrigins(process.env.CORS_ORIGINS || '');
 const SERVE_STATIC = String(process.env.SERVE_STATIC || '').toLowerCase() === 'true';
 const APP_BASE_PATH = normalizeBasePath(process.env.APP_BASE_PATH || '/');
 const AUTH_ISSUER = 'thanwya-api';
+const teacherImageSeedDir = path.join(__dirname, 'seed', 'teacher-images');
 
 const app = express();
 const rateLimits = new Map();
 
-await mkdir(dataDir, { recursive: true });
-await mkdir(uploadsDir, { recursive: true });
-
 const upload = multer({
-  dest: uploadsDir,
+  storage: multer.memoryStorage(),
   limits: { fileSize: UPLOAD_MAX_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname || '').toLowerCase();
@@ -64,6 +65,9 @@ app.disable('x-powered-by');
 app.use(cors(buildCorsOptions()));
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
+await initDb();
+await ensureBundledTeacherImages();
+
 function log(level, message, meta = {}) {
   const entry = {
     timestamp: new Date().toISOString(),
@@ -81,6 +85,40 @@ function log(level, message, meta = {}) {
     return;
   }
   console.log(line);
+}
+
+async function ensureBundledTeacherImages() {
+  for (const entry of TEACHER_IMAGE_ASSET_MANIFEST) {
+    const existing = await readAsset(entry.assetId);
+    if (existing?.asset_kind === 'teacher-image') continue;
+
+    const assetPath = path.join(teacherImageSeedDir, entry.fileName);
+    if (!existsSync(assetPath)) {
+      log('warn', 'Teacher image seed file missing', {
+        assetId: entry.assetId,
+        fileName: entry.fileName,
+      });
+      continue;
+    }
+
+    const data = await readFile(assetPath);
+    const sha256 = createHash('sha256').update(data).digest('hex');
+    await writeAsset({
+      id: entry.assetId,
+      assetKind: 'teacher-image',
+      fileName: entry.fileName,
+      displayName: entry.normalizedName,
+      mimeType: entry.mimeType,
+      sizeBytes: data.length,
+      sha256,
+      visibility: 'public',
+      metadata: {
+        normalizedName: entry.normalizedName,
+        category: 'teacher-image',
+      },
+      data,
+    });
+  }
 }
 
 function buildCorsOptions() {
@@ -200,7 +238,7 @@ function verifyToken(token) {
   if (!safeSignatureEquals(signature, expected)) return null;
   try {
     const payload = JSON.parse(decodeBase64Url(body));
-    if (payload.type !== 'session' && payload.type !== 'video-ticket') return null;
+    if (payload.type !== 'session' && payload.type !== 'video-ticket' && payload.type !== 'pdf-ticket') return null;
     if (payload.iss !== AUTH_ISSUER) return null;
     if (payload.exp && Date.now() > payload.exp) return null;
     return payload;
@@ -224,6 +262,16 @@ function createVideoTicket(payload) {
   return signToken({
     ...payload,
     type: 'video-ticket',
+    iss: AUTH_ISSUER,
+    iat: Date.now(),
+    exp: Date.now() + 1000 * 60 * 5,
+  });
+}
+
+function createPdfTicket(payload) {
+  return signToken({
+    ...payload,
+    type: 'pdf-ticket',
     iss: AUTH_ISSUER,
     iat: Date.now(),
     exp: Date.now() + 1000 * 60 * 5,
@@ -382,6 +430,8 @@ function sanitizePdfResource(pdf, index) {
     title: asTrimmedString(String(current.title ?? ''), `pdf[${index}].title`, { max: 200 }),
     pages: Math.round(asPositiveNumber(current.pages ?? 0, `pdf[${index}].pages`, { min: 0, max: 10000 })),
     summary: asOptionalString(current.summary, `pdf[${index}].summary`, { max: 1000 }),
+    assetId: asOptionalString(current.assetId, `pdf[${index}].assetId`, { max: 128 }),
+    fileName: asOptionalString(current.fileName, `pdf[${index}].fileName`, { max: 255 }),
   };
 }
 
@@ -391,13 +441,13 @@ function sanitizeExamResource(exam, index) {
     ? []
     : asArray(current.questionsData, `exam[${index}].questionsData`, { max: 200 }).map((question, questionIndex) => sanitizeQuestion(question, questionIndex));
 
-  return {
+  return ensureExamQuestionsData({
     id: asTrimmedString(String(current.id ?? ''), `exam[${index}].id`, { max: 128 }),
     title: asTrimmedString(String(current.title ?? ''), `exam[${index}].title`, { max: 200 }),
     questions: Math.round(asPositiveNumber(current.questions ?? questionsData.length, `exam[${index}].questions`, { min: 0, max: 500 })),
     minutes: Math.round(asPositiveNumber(current.minutes ?? 0, `exam[${index}].minutes`, { min: 0, max: 600 })),
     questionsData,
-  };
+  });
 }
 
 function sanitizeFolder(folder, field = 'folder') {
@@ -417,11 +467,14 @@ function sanitizeFolder(folder, field = 'folder') {
 
 function sanitizeTeacher(teacher, index) {
   const current = asObject(teacher, `teacher[${index}]`);
+  const imageAssetId = asOptionalString(current.imageAssetId || teacherImageAssetIdFor(current.name), `teacher[${index}].imageAssetId`, { max: 128 });
+  const image = asOptionalString(current.image, `teacher[${index}].image`, { max: 2_000_000 });
   return {
     id: asTrimmedString(String(current.id ?? ''), `teacher[${index}].id`, { max: 128 }),
     name: asTrimmedString(String(current.name ?? ''), `teacher[${index}].name`, { max: 200 }),
     role: asOptionalString(current.role, `teacher[${index}].role`, { max: 100 }),
-    image: asOptionalString(current.image, `teacher[${index}].image`, { max: 2_000_000 }),
+    imageAssetId,
+    image: imageAssetId ? teacherImageUrlForAsset(imageAssetId) : image,
     lessons: asArray(current.lessons ?? [], `teacher[${index}].lessons`, { max: 300 }).map((lesson, lessonIndex) => sanitizeFolder(lesson, `teacher[${index}].lessons[${lessonIndex}]`)),
   };
 }
@@ -500,7 +553,10 @@ function sanitizeContentItem(item, index) {
 
 function sanitizeStandaloneExam(exam, index) {
   const current = asObject(exam, `standaloneExam[${index}]`);
-  return {
+  const questionsData = current.questionsData == null
+    ? []
+    : asArray(current.questionsData, `standaloneExam[${index}].questionsData`, { max: 200 }).map((question, questionIndex) => sanitizeQuestion(question, questionIndex));
+  return ensureExamQuestionsData({
     id: asTrimmedString(String(current.id ?? ''), `standaloneExam[${index}].id`, { max: 128 }),
     title: asTrimmedString(String(current.title ?? ''), `standaloneExam[${index}].title`, { max: 200 }),
     subject: asTrimmedString(String(current.subject ?? ''), `standaloneExam[${index}].subject`, { max: 200 }),
@@ -511,7 +567,8 @@ function sanitizeStandaloneExam(exam, index) {
     minutes: Math.round(asPositiveNumber(current.minutes ?? 0, `standaloneExam[${index}].minutes`, { min: 0, max: 600 })),
     status: asEnum(current.status || 'closed', `standaloneExam[${index}].status`, ['open', 'closed'], 'closed'),
     createdAt: asIsoDate(current.createdAt || new Date().toISOString(), `standaloneExam[${index}].createdAt`, { allowEmpty: false }),
-  };
+    questionsData,
+  });
 }
 
 function sanitizeLessonAccessRecord(item, index) {
@@ -607,32 +664,49 @@ function verifySecret(secret, hash, salt) {
   return safeSignatureEquals(next, hash);
 }
 
-async function readStore() {
-  const candidates = [storePath, storeBackupPath];
-  for (const candidate of candidates) {
-    if (!existsSync(candidate)) continue;
-    try {
-      const raw = await readFile(candidate, 'utf8');
-      const parsed = normalizeValue(JSON.parse(raw));
-      return migrateStore(sanitizeStoreShape(parsed));
-    } catch (error) {
-      log('warn', 'Failed to read store candidate', {
-        path: candidate,
-        error: error instanceof Error ? error.message : String(error),
-      });
+function createSecureCode(length, alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') {
+  let output = '';
+  while (output.length < length) {
+    const bytes = randomBytes(length);
+    for (const byte of bytes) {
+      output += alphabet[byte % alphabet.length];
+      if (output.length >= length) break;
     }
   }
+  return output;
+}
 
-  return migrateStore({
+function createDefaultStore() {
+  return migrateStore(sanitizeStoreShape({
     'thanwya.meta': sanitizeMeta(null),
-    'thanwya.codes': [],
+    'thanwya.codes': SEED_CODES,
     'thanwya.lessonCodes': [],
     'thanwya.lessonAccess': [],
-    'thanwya.content': [],
-    'thanwya.exams': [],
-    'thanwya.library': [],
+    'thanwya.content': SEED_CONTENT,
+    'thanwya.exams': SEED_EXAMS,
+    'thanwya.library': createSeedLibrary(),
     'thanwya.theme': 'light',
-  });
+  }));
+}
+
+async function readStore() {
+  const stored = await readState();
+  if (!stored) {
+    const seed = createDefaultStore();
+    await writeState(seed);
+    return seed;
+  }
+
+  const raw = normalizeValue(stored);
+  const legacyExamStats = countLegacyExamGaps(raw);
+  const migrated = migrateStore(sanitizeStoreShape(raw));
+
+  if (legacyExamStats.missingQuestionSets > 0) {
+    await writeState(normalizeValue(migrated));
+    log('info', 'Backfilled legacy exam question sets', legacyExamStats);
+  }
+
+  return migrated;
 }
 
 async function writeStore(store) {
@@ -641,14 +715,7 @@ async function writeStore(store) {
     ...sanitizeMeta(sanitized['thanwya.meta']),
     updatedAt: new Date().toISOString(),
   };
-
-  const serialized = JSON.stringify(normalizeValue(sanitized), null, 2);
-  await writeFile(storeTempPath, serialized, 'utf8');
-  if (existsSync(storePath)) {
-    await copyFile(storePath, storeBackupPath);
-  }
-  await copyFile(storeTempPath, storePath);
-  await unlink(storeTempPath).catch(() => {});
+  await writeState(normalizeValue(sanitized));
 }
 
 function walkLessons(folders = [], visitor, parent = null, subject = null, teacher = null) {
@@ -689,6 +756,23 @@ function findVideoByAssetId(library, assetId) {
   return null;
 }
 
+function findPdfByAssetId(library, assetId) {
+  for (const subject of library ?? []) {
+    for (const teacher of subject.teachers ?? []) {
+      let found = null;
+      walkLessons(teacher.lessons ?? [], (folder, _parent, currentSubject, currentTeacher) => {
+        if (found) return;
+        const pdf = (folder.pdfs ?? []).find((item) => item.assetId === assetId || item.id === assetId);
+        if (pdf) {
+          found = { pdf, lesson: folder, subject: currentSubject, teacher: currentTeacher };
+        }
+      }, null, subject, teacher);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 function migrateStore(store) {
   const next = { ...store };
   next['thanwya.meta'] = sanitizeMeta(next['thanwya.meta']);
@@ -700,6 +784,78 @@ function migrateStore(store) {
   next['thanwya.library'] = Array.isArray(next['thanwya.library']) ? next['thanwya.library'] : [];
   next['thanwya.theme'] = next['thanwya.theme'] === 'dark' ? 'dark' : 'light';
   return next;
+}
+
+function countLegacyExamGaps(store) {
+  let missingQuestionSets = 0;
+  let generatedQuestionCount = 0;
+
+  for (const exam of store?.['thanwya.exams'] ?? []) {
+    if (!Array.isArray(exam?.questionsData) || exam.questionsData.length === 0) {
+      missingQuestionSets += 1;
+      generatedQuestionCount += Math.max(0, Math.round(Number(exam?.questions) || 0));
+    }
+  }
+
+  for (const subject of store?.['thanwya.library'] ?? []) {
+    for (const teacher of subject?.teachers ?? []) {
+      walkLessons(teacher?.lessons ?? [], (lesson) => {
+        for (const exam of lesson?.exams ?? []) {
+          if (!Array.isArray(exam?.questionsData) || exam.questionsData.length === 0) {
+            missingQuestionSets += 1;
+            generatedQuestionCount += Math.max(0, Math.round(Number(exam?.questions) || 0));
+          }
+        }
+      }, null, subject, teacher);
+    }
+  }
+
+  return { missingQuestionSets, generatedQuestionCount };
+}
+
+function countLessonExamResources(library) {
+  let total = 0;
+  for (const subject of library ?? []) {
+    for (const teacher of subject?.teachers ?? []) {
+      walkLessons(teacher?.lessons ?? [], (lesson) => {
+        total += Array.isArray(lesson?.exams) ? lesson.exams.length : 0;
+      }, null, subject, teacher);
+    }
+  }
+  return total;
+}
+
+async function persistUploadedAsset({
+  assetId,
+  assetKind,
+  file,
+  displayName,
+  visibility = 'private',
+  metadata = {},
+}) {
+  const fileName = file.originalname || `${assetId}`;
+  const mimeType = file.mimetype || 'application/octet-stream';
+  const data = file.buffer;
+  const sha256 = createHash('sha256').update(data).digest('hex');
+  await writeAsset({
+    id: assetId,
+    assetKind,
+    fileName,
+    displayName: displayName || fileName,
+    mimeType,
+    sizeBytes: data.length,
+    sha256,
+    visibility,
+    metadata,
+    data,
+  });
+  return {
+    id: assetId,
+    fileName,
+    mimeType,
+    bytes: data.length,
+    sha256,
+  };
 }
 
 function isAdminConfigured(store) {
@@ -756,6 +912,15 @@ function serializeAdminStore(store) {
   };
 }
 
+function serializePublicStore(store) {
+  return {
+    'thanwya.content': store['thanwya.content'],
+    'thanwya.exams': store['thanwya.exams'],
+    'thanwya.library': store['thanwya.library'],
+    'thanwya.theme': store['thanwya.theme'],
+  };
+}
+
 async function validateUploadedFile(file) {
   assert(Boolean(file), 400, 'Missing file');
 
@@ -764,7 +929,8 @@ async function validateUploadedFile(file) {
   assert(UPLOAD_ALLOWED_EXTENSIONS.includes(ext), 400, `Unsupported file extension: ${ext || 'unknown'}`);
   assert(UPLOAD_ALLOWED_MIME_TYPES.includes(mime), 400, `Unsupported file type: ${mime || 'unknown'}`);
 
-  const chunk = await readFile(file.path);
+  const chunk = file.buffer;
+  assert(Buffer.isBuffer(chunk) && chunk.length > 0, 400, 'Missing file data');
   const signature = chunk.subarray(0, 16);
   const hasFtyp = chunk.includes(Buffer.from('ftyp'));
   const isWebm = signature.length >= 4
@@ -781,6 +947,36 @@ async function validateUploadedFile(file) {
   assert(hasFtyp, 400, 'Uploaded MP4/MOV signature is invalid');
 }
 
+async function validateUploadedPdf(file) {
+  assert(Boolean(file), 400, 'Missing file');
+
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const mime = String(file.mimetype || '').toLowerCase();
+  assert(PDF_ALLOWED_EXTENSIONS.includes(ext), 400, `Unsupported PDF extension: ${ext || 'unknown'}`);
+  assert(PDF_ALLOWED_MIME_TYPES.includes(mime), 400, `Unsupported PDF type: ${mime || 'unknown'}`);
+
+  const chunk = file.buffer;
+  assert(Buffer.isBuffer(chunk) && chunk.length > 4, 400, 'Missing file data');
+  assert(chunk.subarray(0, 4).equals(Buffer.from('%PDF')), 400, 'Uploaded PDF signature is invalid');
+}
+
+async function validateUploadedImage(file) {
+  assert(Boolean(file), 400, 'Missing file');
+
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const mime = String(file.mimetype || '').toLowerCase();
+  assert(IMAGE_ALLOWED_EXTENSIONS.includes(ext), 400, `Unsupported image extension: ${ext || 'unknown'}`);
+  assert(IMAGE_ALLOWED_MIME_TYPES.includes(mime), 400, `Unsupported image type: ${mime || 'unknown'}`);
+
+  const chunk = file.buffer;
+  assert(Buffer.isBuffer(chunk) && chunk.length > 12, 400, 'Missing file data');
+
+  const isPng = chunk.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const isJpeg = chunk[0] === 0xff && chunk[1] === 0xd8 && chunk[chunk.length - 2] === 0xff && chunk[chunk.length - 1] === 0xd9;
+  const isWebp = chunk.subarray(0, 4).equals(Buffer.from('RIFF')) && chunk.subarray(8, 12).equals(Buffer.from('WEBP'));
+  assert(isPng || isJpeg || isWebp, 400, 'Uploaded image signature is invalid');
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
@@ -795,6 +991,33 @@ app.get('/api/auth/config', async (_req, res) => {
     adminConfigured: isAdminConfigured(store),
     bootstrapEnabled: Boolean(ADMIN_BOOTSTRAP_TOKEN),
   });
+});
+
+app.get('/api/public/state', async (_req, res) => {
+  const store = await readStore();
+  log('info', 'Public state served', {
+    subjectCount: Array.isArray(store['thanwya.library']) ? store['thanwya.library'].length : 0,
+    lessonExamCount: countLessonExamResources(store['thanwya.library']),
+    standaloneExamCount: Array.isArray(store['thanwya.exams']) ? store['thanwya.exams'].length : 0,
+  });
+  res.json(serializePublicStore(store));
+});
+
+app.patch('/api/public/state', requireAuth(['admin']), async (req, res) => {
+  const patch = sanitizeStoreSections(req.body ?? {});
+  const allowed = {};
+  if (patch['thanwya.theme'] != null) {
+    allowed['thanwya.theme'] = patch['thanwya.theme'];
+  }
+  assert(Object.keys(allowed).length > 0, 400, 'No valid public state provided');
+
+  const current = await readStore();
+  await writeStore({
+    ...current,
+    ...allowed,
+  });
+
+  res.json({ ok: true, store: serializePublicStore(await readStore()) });
 });
 
 app.post('/api/auth/admin/bootstrap', async (req, res) => {
@@ -935,7 +1158,7 @@ app.post('/api/lesson-codes', requireAuth(['admin']), async (req, res) => {
 
   const code = sanitizeLessonCode({
     id: `lesson-code-${randomUUID()}`,
-    value: `LSN-${randomUUID().slice(0, 8).toUpperCase()}`,
+    value: createSecureCode(12),
     lessonId: lesson.folder.id,
     folderId: lesson.folder.id,
     subjectId: lesson.subject.id,
@@ -1012,13 +1235,38 @@ app.post('/api/student/lesson-access/claim', requireAuth(['student']), async (re
   res.json({ ok: true, unlocked: true, access });
 });
 
+app.get('/api/uploads/teacher-image/:id', async (req, res) => {
+  const assetId = asTrimmedString(String(req.params.id ?? ''), 'assetId', { max: 128 });
+  const asset = await readAsset(assetId);
+  if (!asset || asset.asset_kind !== 'teacher-image') {
+    return res.status(404).end();
+  }
+
+  res.set('Cache-Control', 'public, max-age=86400, immutable');
+  res.type(asset.mime_type);
+  res.send(Buffer.from(asset.data));
+});
+
 app.get('/api/uploads/video/:id/access', requireAuth(), async (req, res) => {
   const store = await readStore();
   const assetId = asTrimmedString(String(req.params.id ?? ''), 'assetId', { max: 128 });
   const asset = findVideoByAssetId(store['thanwya.library'], assetId);
-  if (!asset) return res.status(404).json({ error: 'Not found' });
+  if (!asset) {
+    log('warn', 'Video access asset missing from lesson library', {
+      assetId,
+      role: req.auth.role,
+      studentCodeId: req.auth.studentCodeId || '',
+    });
+    return res.status(404).json({ error: 'Not found' });
+  }
 
   if (req.auth.role !== 'admin' && !studentHasLessonAccess(store, req.auth.studentCodeId, asset.lesson.id)) {
+    log('warn', 'Video access denied for lesson', {
+      assetId,
+      lessonId: asset.lesson.id,
+      role: req.auth.role,
+      studentCodeId: req.auth.studentCodeId || '',
+    });
     return res.status(403).json({ error: 'Forbidden' });
   }
 
@@ -1029,7 +1277,54 @@ app.get('/api/uploads/video/:id/access', requireAuth(), async (req, res) => {
     studentCodeId: req.auth.studentCodeId || '',
   });
 
+  log('info', 'Video access ticket generated', {
+    assetId,
+    lessonId: asset.lesson.id,
+    role: req.auth.role,
+    studentCodeId: req.auth.studentCodeId || '',
+  });
+
   res.json({ url: `/api/uploads/video/${encodeURIComponent(assetId)}?ticket=${encodeURIComponent(ticket)}` });
+});
+
+app.get('/api/uploads/pdf/:id/access', requireAuth(), async (req, res) => {
+  const store = await readStore();
+  const assetId = asTrimmedString(String(req.params.id ?? ''), 'assetId', { max: 128 });
+  const asset = findPdfByAssetId(store['thanwya.library'], assetId);
+  if (!asset) {
+    log('warn', 'PDF access asset missing from lesson library', {
+      assetId,
+      role: req.auth.role,
+      studentCodeId: req.auth.studentCodeId || '',
+    });
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  if (req.auth.role !== 'admin' && !studentHasLessonAccess(store, req.auth.studentCodeId, asset.lesson.id)) {
+    log('warn', 'PDF access denied for lesson', {
+      assetId,
+      lessonId: asset.lesson.id,
+      role: req.auth.role,
+      studentCodeId: req.auth.studentCodeId || '',
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const ticket = createPdfTicket({
+    role: req.auth.role,
+    pdfId: assetId,
+    lessonId: asset.lesson.id,
+    studentCodeId: req.auth.studentCodeId || '',
+  });
+
+  log('info', 'PDF access ticket generated', {
+    assetId,
+    lessonId: asset.lesson.id,
+    role: req.auth.role,
+    studentCodeId: req.auth.studentCodeId || '',
+  });
+
+  res.json({ url: `/api/uploads/pdf/${encodeURIComponent(assetId)}?ticket=${encodeURIComponent(ticket)}` });
 });
 
 app.get('/api/uploads/video/:id', requireAuth([], { allowQueryTicket: true }), async (req, res) => {
@@ -1037,46 +1332,187 @@ app.get('/api/uploads/video/:id', requireAuth([], { allowQueryTicket: true }), a
   const store = await readStore();
   const asset = findVideoByAssetId(store['thanwya.library'], assetId);
   const payload = req.auth;
+  const storedAsset = await readAsset(assetId);
 
-  if (!asset) return res.status(404).end();
+  if (!asset) {
+    log('warn', 'Video playback asset missing from lesson library', {
+      assetId,
+      authType: payload.type || payload.role || 'unknown',
+    });
+    return res.status(404).end();
+  }
+  if (!storedAsset || storedAsset.asset_kind !== 'video') {
+    log('warn', 'Video playback asset blob missing from database', {
+      assetId,
+      lessonId: asset.lesson.id,
+      authType: payload.type || payload.role || 'unknown',
+    });
+    return res.status(404).end();
+  }
 
   if (payload.type === 'video-ticket') {
     if (payload.videoId !== assetId || payload.lessonId !== asset.lesson.id) {
+      log('warn', 'Video ticket validation failed', {
+        assetId,
+        ticketVideoId: payload.videoId || '',
+        ticketLessonId: payload.lessonId || '',
+        lessonId: asset.lesson.id,
+      });
       return res.status(403).end();
     }
   }
 
   if (payload.role === 'student' && !studentHasLessonAccess(store, payload.studentCodeId, asset.lesson.id)) {
+    log('warn', 'Video playback denied for student without lesson access', {
+      assetId,
+      lessonId: asset.lesson.id,
+      studentCodeId: payload.studentCodeId || '',
+    });
     return res.status(403).end();
   }
 
-  const files = await readdir(uploadsDir);
-  const file = files.find((name) => name.startsWith(`${assetId}.`) || name === assetId);
-  if (!file) return res.status(404).end();
-  res.sendFile(path.join(uploadsDir, file));
+  log('info', 'Video playback started', {
+    assetId,
+    lessonId: asset.lesson.id,
+    fileName: storedAsset.file_name,
+    mimeType: storedAsset.mime_type,
+    bytes: storedAsset.size_bytes,
+    authType: payload.type || payload.role || 'unknown',
+  });
+  res.type(storedAsset.mime_type);
+  res.send(Buffer.from(storedAsset.data));
+});
+
+app.get('/api/uploads/pdf/:id', requireAuth([], { allowQueryTicket: true }), async (req, res) => {
+  const assetId = asTrimmedString(String(req.params.id ?? ''), 'assetId', { max: 128 });
+  const store = await readStore();
+  const asset = findPdfByAssetId(store['thanwya.library'], assetId);
+  const payload = req.auth;
+  const storedAsset = await readAsset(assetId);
+
+  if (!asset) {
+    log('warn', 'PDF playback asset missing from lesson library', {
+      assetId,
+      authType: payload.type || payload.role || 'unknown',
+    });
+    return res.status(404).end();
+  }
+  if (!storedAsset || storedAsset.asset_kind !== 'pdf') {
+    log('warn', 'PDF playback asset blob missing from database', {
+      assetId,
+      lessonId: asset.lesson.id,
+      authType: payload.type || payload.role || 'unknown',
+    });
+    return res.status(404).end();
+  }
+
+  if (payload.type === 'pdf-ticket') {
+    if (payload.pdfId !== assetId || payload.lessonId !== asset.lesson.id) {
+      log('warn', 'PDF ticket validation failed', {
+        assetId,
+        ticketPdfId: payload.pdfId || '',
+        ticketLessonId: payload.lessonId || '',
+        lessonId: asset.lesson.id,
+      });
+      return res.status(403).end();
+    }
+  }
+
+  if (payload.role === 'student' && !studentHasLessonAccess(store, payload.studentCodeId, asset.lesson.id)) {
+    log('warn', 'PDF playback denied for student without lesson access', {
+      assetId,
+      lessonId: asset.lesson.id,
+      studentCodeId: payload.studentCodeId || '',
+    });
+    return res.status(403).end();
+  }
+
+  res.type(storedAsset.mime_type);
+  res.set('Content-Disposition', `inline; filename=\"${String(storedAsset.file_name || 'document.pdf').replace(/\"/g, '')}\"`);
+  res.send(Buffer.from(storedAsset.data));
 });
 
 app.post('/api/uploads/video', requireAuth(['admin']), upload.single('file'), async (req, res) => {
   await validateUploadedFile(req.file);
   const assetId = `video-${randomUUID()}`;
-  const ext = path.extname(req.file.originalname || '.mp4') || '.mp4';
-  const finalName = `${assetId}${ext}`;
-  const finalPath = path.join(uploadsDir, finalName);
-  await rename(req.file.path, finalPath);
+  const asset = await persistUploadedAsset({
+    assetId,
+    assetKind: 'video',
+    file: req.file,
+    displayName: req.file.originalname,
+    metadata: {
+      category: 'lesson-video',
+    },
+  });
+  log('info', 'Video uploaded to database', {
+    assetId: asset.id,
+    fileName: asset.fileName,
+    mimeType: asset.mimeType,
+    bytes: asset.bytes,
+    sha256: asset.sha256,
+  });
   res.status(201).json({
     id: assetId,
-    fileName: req.file.originalname,
+    fileName: asset.fileName,
     url: `/api/uploads/video/${assetId}`,
+  });
+});
+
+app.post('/api/uploads/pdf', requireAuth(['admin']), upload.single('file'), async (req, res) => {
+  await validateUploadedPdf(req.file);
+  const assetId = `pdf-${randomUUID()}`;
+  const asset = await persistUploadedAsset({
+    assetId,
+    assetKind: 'pdf',
+    file: req.file,
+    displayName: req.file.originalname,
+    metadata: {
+      category: 'lesson-pdf',
+    },
+  });
+  log('info', 'PDF uploaded to database', {
+    assetId: asset.id,
+    fileName: asset.fileName,
+    mimeType: asset.mimeType,
+    bytes: asset.bytes,
+    sha256: asset.sha256,
+  });
+  res.status(201).json({
+    id: assetId,
+    fileName: asset.fileName,
+    url: `/api/uploads/pdf/${assetId}`,
+  });
+});
+
+app.post('/api/uploads/teacher-image', requireAuth(['admin']), upload.single('file'), async (req, res) => {
+  await validateUploadedImage(req.file);
+  const assetId = `teacher-image-${randomUUID()}`;
+  const asset = await persistUploadedAsset({
+    assetId,
+    assetKind: 'teacher-image',
+    file: req.file,
+    displayName: req.file.originalname,
+    visibility: 'public',
+    metadata: {
+      category: 'teacher-image',
+    },
+  });
+  res.status(201).json({
+    id: assetId,
+    fileName: asset.fileName,
+    url: teacherImageUrlForAsset(assetId),
   });
 });
 
 app.delete('/api/uploads/video/:id', requireAuth(['admin']), async (req, res) => {
   const assetId = asTrimmedString(String(req.params.id ?? ''), 'assetId', { max: 128 });
-  const files = await readdir(uploadsDir);
-  const file = files.find((name) => name.startsWith(`${assetId}.`) || name === assetId);
-  if (file) {
-    await unlink(path.join(uploadsDir, file));
-  }
+  await deleteAsset(assetId);
+  res.json({ ok: true });
+});
+
+app.delete('/api/uploads/pdf/:id', requireAuth(['admin']), async (req, res) => {
+  const assetId = asTrimmedString(String(req.params.id ?? ''), 'assetId', { max: 128 });
+  await deleteAsset(assetId);
   res.json({ ok: true });
 });
 
@@ -1088,10 +1524,6 @@ if (SERVE_STATIC && existsSync(path.join(rootDir, 'dist'))) {
 }
 
 app.use((error, req, res, _next) => {
-  if (req.file?.path) {
-    unlink(req.file.path).catch(() => {});
-  }
-
   const status = error instanceof HttpError
     ? error.status
     : error?.name === 'MulterError'

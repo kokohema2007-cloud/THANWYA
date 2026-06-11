@@ -1,108 +1,73 @@
 import { buildApiUrl, getAuthToken } from './serverApi.js';
 
-const DB_NAME = 'thanwya-assets';
-const DB_VERSION = 1;
-const STORE_NAME = 'videos';
-
-function openDb() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+async function uploadProtectedAsset(path, file, logPrefix) {
+  console.info(`[${logPrefix}] upload-started`, {
+    fileName: file.name,
+    mimeType: file.type || 'application/octet-stream',
+    bytes: file.size,
   });
+  const formData = new FormData();
+  formData.append('file', file);
+  const token = getAuthToken();
+  const response = await fetch(buildApiUrl(path), {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error((await response.text()) || 'Failed to upload video');
+  }
+  const data = await response.json();
+  console.info(`[${logPrefix}] upload-finished`, data);
+  return data;
+}
+
+async function deleteProtectedAsset(path) {
+  const token = getAuthToken();
+  const response = await fetch(buildApiUrl(path), {
+    method: 'DELETE',
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!response.ok) {
+    throw new Error((await response.text()) || 'Failed to delete asset');
+  }
 }
 
 export async function saveVideoAsset(file) {
-  try {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = getAuthToken();
-    const response = await fetch(buildApiUrl('/api/uploads/video'), {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      body: formData,
-    });
-    if (response.ok) {
-      return response.json();
-    }
-  } catch (error) {
-    console.warn('Remote video upload failed, falling back to IndexedDB', error);
-  }
+  return uploadProtectedAsset('/api/uploads/video', file, 'video-flow');
+}
 
-  const db = await openDb();
-  const id = `video-${crypto.randomUUID()}`;
-  const asset = {
-    id,
-    fileName: file.name,
-    mimeType: file.type || 'video/mp4',
-    blob: file,
-  };
+export async function savePdfAsset(file) {
+  return uploadProtectedAsset('/api/uploads/pdf', file, 'pdf-flow');
+}
 
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).put(asset);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-
-  db.close();
-  return { id, fileName: file.name, url: '' };
+export async function saveTeacherImageAsset(file) {
+  return uploadProtectedAsset('/api/uploads/teacher-image', file, 'teacher-image-flow');
 }
 
 export async function loadVideoAsset(id) {
   if (!id) return null;
-  try {
+  console.info('[video-flow] asset-fetch-started', { assetId: id });
   const token = getAuthToken();
-    const response = await fetch(buildApiUrl(`/api/uploads/video/${encodeURIComponent(id)}`), {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    });
-    if (response.ok) {
-      const blob = await response.blob();
-      return {
-        id,
-        blob,
-        fileName: id,
-      };
-    }
-  } catch (error) {
-    console.warn('Remote video fetch failed, trying IndexedDB', error);
-  }
-
-  const db = await openDb();
-  const asset = await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const request = tx.objectStore(STORE_NAME).get(id);
-    request.onsuccess = () => resolve(request.result ?? null);
-    request.onerror = () => reject(request.error);
+  const response = await fetch(buildApiUrl(`/api/uploads/video/${encodeURIComponent(id)}`), {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
-  db.close();
-  return asset;
+  if (!response.ok) {
+    console.warn('[video-flow] asset-fetch-failed', { assetId: id, status: response.status });
+    return null;
+  }
+  console.info('[video-flow] asset-fetch-finished', { assetId: id, mimeType: response.headers.get('content-type') || '' });
+  return {
+    id,
+    blob: await response.blob(),
+    fileName: id,
+  };
 }
 
 export async function deleteVideoAsset(id) {
-  try {
-    const token = getAuthToken();
-    await fetch(buildApiUrl(`/api/uploads/video/${encodeURIComponent(id)}`), {
-      method: 'DELETE',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    });
-    return;
-  } catch (error) {
-    console.warn('Remote video delete failed, trying IndexedDB', error);
-  }
+  return deleteProtectedAsset(`/api/uploads/video/${encodeURIComponent(id)}`);
+}
 
-  const db = await openDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+export async function deletePdfAsset(id) {
+  return deleteProtectedAsset(`/api/uploads/pdf/${encodeURIComponent(id)}`);
 }

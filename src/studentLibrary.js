@@ -1,5 +1,6 @@
 import { subjectsForProfile } from './data.js';
-import { localTeacherImageFor } from './teacherImages.js';
+import { buildGeneratedQuestions } from './examTools.js';
+import { localTeacherImageFor, teacherImageAssetIdFor } from './teacherImages.js';
 
 const SUBJECT_CATALOG = [
   {
@@ -117,14 +118,13 @@ function createPdfItems(subject, lessonIndex) {
 }
 
 function createExamItems(subject, lessonIndex) {
-  return [
-    {
-      id: `${slugify(subject)}-lesson-${lessonIndex}-exam-1`,
-      title: `امتحان ${subject} - ${LESSON_NAMES[lessonIndex - 1]}`,
-      questions: 10 + lessonIndex * 5,
-      minutes: 20 + lessonIndex * 5,
-    },
-  ];
+  const exam = {
+    id: `${slugify(subject)}-lesson-${lessonIndex}-exam-1`,
+    title: `امتحان ${subject} - ${LESSON_NAMES[lessonIndex - 1]}`,
+    questions: 10 + lessonIndex * 5,
+    minutes: 20 + lessonIndex * 5,
+  };
+  return [{ ...exam, questionsData: buildGeneratedQuestions(exam) }];
 }
 
 function createLessons(subject, teacherName) {
@@ -145,10 +145,12 @@ function createLessons(subject, teacherName) {
 }
 
 function createTeacher(subject, teacherName) {
+  const imageAssetId = teacherImageAssetIdFor(teacherName);
   return {
     id: `${slugify(subject)}-${slugify(teacherName)}`,
     name: teacherName,
     role: 'مدرس المادة',
+    imageAssetId,
     image: localTeacherImageFor(teacherName) ?? portraitForTeacher(subject, teacherName),
     lessons: createLessons(subject, teacherName),
   };

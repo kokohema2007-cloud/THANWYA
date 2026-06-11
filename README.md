@@ -17,7 +17,7 @@ npm start          # production backend start
 ## Local Setup
 
 1. Create a local env file from `.env.example`.
-2. Set at least `AUTH_SECRET` and `ADMIN_BOOTSTRAP_TOKEN`.
+2. Set at least `AUTH_SECRET`, `ADMIN_BOOTSTRAP_TOKEN`, and `DATABASE_URL`.
 3. Start the API with `npm run api` or both apps with `npm run dev:full`.
 4. Open the Vite URL, then bootstrap the admin account from the admin screen.
 5. After bootstrap, sign in with the admin code you created.
@@ -33,6 +33,7 @@ npm start          # production backend start
 
 - `AUTH_SECRET`: HMAC signing secret for session and video tokens.
 - `ADMIN_BOOTSTRAP_TOKEN`: one-time bootstrap secret used to create the first admin code.
+- `DATABASE_URL`: PostgreSQL connection string for Neon.
 
 ## Optional Environment Variables
 
@@ -47,9 +48,6 @@ npm start          # production backend start
 - `UPLOAD_ALLOWED_EXTENSIONS`: comma-separated upload extensions.
 - `UPLOAD_ALLOWED_MIME_TYPES`: comma-separated upload MIME types.
 - `CORS_ORIGINS`: comma-separated allowed frontend origins.
-- `DATA_DIR`: directory used for JSON persistence when `STORE_FILE_PATH` is not set.
-- `STORE_FILE_PATH`: explicit path to the JSON store file.
-- `UPLOADS_DIR`: directory used for uploaded video files.
 - `SERVE_STATIC`: set to `true` only if the backend should also serve `dist`.
 - `APP_BASE_PATH`: base path used when `SERVE_STATIC=true`.
 - `VITE_API_BASE_URL`: public frontend API base URL, used in production builds.
@@ -62,10 +60,7 @@ npm start          # production backend start
 1. Deploy the repository or backend service with start command `npm start`.
 2. Set `NODE_ENV=production`.
 3. Set `AUTH_SECRET`, `ADMIN_BOOTSTRAP_TOKEN`, and `CORS_ORIGINS`.
-4. Mount a persistent Railway volume and point:
-   - `STORE_FILE_PATH` to a file on that volume.
-   - `UPLOADS_DIR` to a directory on that volume.
-5. Keep `SERVE_STATIC=false` when the frontend is hosted on Vercel.
+4. Keep `SERVE_STATIC=false` when the frontend is hosted on Vercel.
 
 ### Frontend on Vercel
 

@@ -38,7 +38,7 @@ import {
   majorById,
   trackById,
 } from './data.js';
-import { createEmptyQuestion, gradeAnswers, normalizeQuestions } from './examTools.js';
+import { createEmptyQuestion, ensureExamQuestionsData, gradeAnswers, normalizeQuestions } from './examTools.js';
 import {
   appendChildFolder,
   countNestedFolders,
@@ -51,15 +51,17 @@ import {
   updateFolderById,
 } from './libraryFolders.js';
 import { filterLibraryForProfile } from './studentLibrary.js';
-import { KEYS, bootstrapStore, hydrateStoreFromRemote, loadStore, saveStore } from './storage.js';
-import { deleteVideoAsset, loadVideoAsset, saveVideoAsset } from './videoAssets.js';
+import { KEYS, bootstrapStore, hydratePublicStore, hydrateStoreFromRemote, loadStore, saveStore } from './storage.js';
+import { deletePdfAsset, deleteVideoAsset, loadVideoAsset, savePdfAsset, saveTeacherImageAsset, saveVideoAsset } from './videoAssets.js';
 import {
+  buildApiUrl,
   clearAuthToken,
   bootstrapAdmin,
   claimLessonCode,
   fetchAuthConfig,
   fetchStudentAccess,
   loginWithCode as apiLoginWithCode,
+  requestPdfAccess,
   refreshAuthSession,
   requestVideoAccess,
 } from './serverApi.js';
@@ -81,7 +83,7 @@ function createId(prefix) {
 }
 
 function createLessonAccessCode() {
-  return `LSN-${randomToken(6)}-${randomToken(4)}`;
+  return randomToken(12);
 }
 
 function createLessonCodeEntry({ lesson, subject, teacher }) {
@@ -103,20 +105,8 @@ function createLessonCodeEntry({ lesson, subject, teacher }) {
   };
 }
 
-function createStudentAccessCode(existingCodes) {
-  const startFrom = 41510000;
-  const numericCodes = existingCodes
-    .map((item) => String(item.value ?? '').trim())
-    .filter((value) => /^\d+$/.test(value))
-    .map((value) => Number(value));
-
-  let nextCode = Math.max(startFrom, ...numericCodes) + 1;
-  const used = new Set(existingCodes.map((item) => String(item.value ?? '').trim()));
-  while (used.has(String(nextCode))) {
-    nextCode += 1;
-  }
-
-  return String(nextCode);
+function createStudentAccessCode() {
+  return randomToken(12);
 }
 
 function randomToken(size = 12) {
@@ -144,6 +134,19 @@ function formatDateOnly(value) {
     month: 'long',
     year: 'numeric',
   }).format(new Date(value));
+}
+
+function logVideoStage(stage, details = {}) {
+  console.info(`[video-flow] ${stage}`, details);
+}
+
+function logExamStage(stage, details = {}) {
+  console.info(`[exam-flow] ${stage}`, details);
+}
+
+function resolveMediaUrl(url) {
+  if (!url) return '';
+  return String(url).startsWith('/api/') ? buildApiUrl(url) : url;
 }
 
 function studentPathLabel(profile) {
@@ -239,6 +242,16 @@ function App() {
 
   useEffect(() => {
     bootstrapStore();
+    hydratePublicStore()
+      .then(() => {
+        setTheme(loadStore(KEYS.theme, 'light'));
+        setContent(loadStore(KEYS.content, []));
+        setExams(loadStore(KEYS.exams, []));
+        setLibrary(loadStore(KEYS.library, []));
+      })
+      .catch((error) => {
+        console.warn('Failed to load public store', error);
+      });
     fetchAuthConfig()
       .then((config) => setAuthConfig({
         adminConfigured: Boolean(config?.adminConfigured),
@@ -264,9 +277,9 @@ function App() {
             : { role: 'admin', token: current.token });
           if (current.role === 'admin') {
             hydrateStoreFromRemote().then(() => {
-              setTheme(loadStore(KEYS.theme, 'light'));
               setCodes(loadStore(KEYS.codes, []));
               setLessonCodes(loadStore(KEYS.lessonCodes, []));
+              setTheme(loadStore(KEYS.theme, 'light'));
               setContent(loadStore(KEYS.content, []));
               setExams(loadStore(KEYS.exams, []));
               setLibrary(loadStore(KEYS.library, []));
@@ -952,10 +965,9 @@ function CodesPanel({ codes, setCodes }) {
   function submitCode(event) {
     event.preventDefault();
     const profile = audienceFromForm(form);
-    const level = levelById(profile.level);
     const code = {
       id: createId('code'),
-      value: createStudentAccessCode(codes),
+      value: createStudentAccessCode(),
       status: 'unused',
       createdAt: new Date().toISOString(),
       activatedAt: '',
@@ -1599,18 +1611,27 @@ function LibraryPanel({ library, setLibrary }) {
     return next.map((item, order) => ({ ...item, number: item.number ? order + 1 : item.number }));
   }
 
-  function submitTeacher(event) {
+  async function submitTeacher(event) {
     event.preventDefault();
     if (!selectedSubject || !teacherForm.name.trim()) return;
-    const teacherImage =
-      teacherForm.imageFile ||
-      teacherForm.image.trim() ||
-      'https://api.dicebear.com/9.x/personas/svg?seed=' + encodeURIComponent(teacherForm.name.trim()) + '&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf';
+
+    let teacherImage = teacherForm.image.trim();
+    let imageAssetId = '';
+    if (teacherForm.imageFile) {
+      const uploaded = await saveTeacherImageAsset(teacherForm.imageFile);
+      imageAssetId = uploaded.id;
+      teacherImage = uploaded.url;
+    }
+    if (!teacherImage) {
+      teacherImage = `https://api.dicebear.com/9.x/personas/svg?seed=${encodeURIComponent(teacherForm.name.trim())}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`;
+    }
+
     const teacher = {
       id: createId('teacher'),
       name: teacherForm.name.trim(),
       role: 'مدرس المادة',
       image: teacherImage,
+      imageAssetId,
       lessons: [],
     };
     updateSubject(selectedSubject.id, (subject) => ({ ...subject, teachers: [...subject.teachers, teacher] }));
@@ -1826,7 +1847,7 @@ function LibraryPanel({ library, setLibrary }) {
                     key={teacher.id}
                   >
                     <button type="button" className="teacher-select-surface" onClick={() => setTeacherId(teacher.id)}>
-                      <img src={teacher.image} alt={teacher.name} loading="lazy" />
+                      <img src={resolveMediaUrl(teacher.image)} alt={teacher.name} loading="lazy" />
                       <div>
                         <strong>{teacher.name}</strong>
                         <span>{teacher.lessons.length} فولدر</span>
@@ -2283,7 +2304,7 @@ function StudentDashboard({ profile, library, homeSignal }) {
             {selectedSubject.teachers.map((teacher) => (
               <article className="collection-card teacher-showcase-card" key={teacher.id}>
                 <div className="collection-cover portrait">
-                  <img src={teacher.image} alt={teacher.name} loading="lazy" />
+                  <img src={resolveMediaUrl(teacher.image)} alt={teacher.name} loading="lazy" />
                   <span className="collection-badge">مدرس</span>
                 </div>
                 <div className="collection-content">
@@ -2611,6 +2632,8 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
     videoFile: null,
     pdfTitle: '',
     pdfPages: '',
+    pdfFileName: '',
+    pdfFile: null,
   });
 
   const selectedSubject = library.find((subject) => subject.id === subjectId) ?? library[0] ?? null;
@@ -2672,12 +2695,28 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
     return ids;
   }
 
+  function collectPdfAssetIdsFromFolders(folders) {
+    const ids = [];
+    for (const folder of folders ?? []) {
+      for (const pdf of folder.pdfs ?? []) {
+        if (pdf.assetId) ids.push(pdf.assetId);
+      }
+      ids.push(...collectPdfAssetIdsFromFolders(folder.children ?? []));
+    }
+    return ids;
+  }
+
   function removeSubject(subjectTargetId) {
     const subject = library.find((item) => item.id === subjectTargetId);
     if (!subject) return;
     collectVideoAssetIdsFromFolders(subject.teachers.flatMap((teacher) => teacher.lessons ?? [])).forEach((assetId) => {
       deleteVideoAsset(assetId).catch((error) => {
         console.warn('Failed to delete subject video asset', error);
+      });
+    });
+    collectPdfAssetIdsFromFolders(subject.teachers.flatMap((teacher) => teacher.lessons ?? [])).forEach((assetId) => {
+      deletePdfAsset(assetId).catch((error) => {
+        console.warn('Failed to delete subject pdf asset', error);
       });
     });
     setLibrary((items) => items.filter((item) => item.id !== subjectTargetId));
@@ -2704,18 +2743,27 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
     }));
   }
 
-  function submitTeacher(event) {
+  async function submitTeacher(event) {
     event.preventDefault();
     if (!selectedSubject || !teacherForm.name.trim()) return;
-    const teacherImage =
-      teacherForm.imageFile ||
-      teacherForm.image.trim() ||
-      'https://api.dicebear.com/9.x/personas/svg?seed=' + encodeURIComponent(teacherForm.name.trim()) + '&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf';
+
+    let teacherImage = teacherForm.image.trim();
+    let imageAssetId = '';
+    if (teacherForm.imageFile) {
+      const uploaded = await saveTeacherImageAsset(teacherForm.imageFile);
+      imageAssetId = uploaded.id;
+      teacherImage = uploaded.url;
+    }
+    if (!teacherImage) {
+      teacherImage = `https://api.dicebear.com/9.x/personas/svg?seed=${encodeURIComponent(teacherForm.name.trim())}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`;
+    }
+
     const teacher = {
       id: createId('teacher'),
       name: teacherForm.name.trim(),
       role: 'مدرس المادة',
       image: teacherImage,
+      imageAssetId,
       lessons: [],
     };
     updateSubject(selectedSubject.id, (subject) => ({ ...subject, teachers: [...subject.teachers, teacher] }));
@@ -2741,6 +2789,9 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
     if (teacher) {
       collectVideoAssetIdsFromFolders(teacher.lessons ?? []).forEach((assetId) => deleteVideoAsset(assetId).catch((error) => {
         console.warn('Failed to delete teacher video asset', error);
+      }));
+      collectPdfAssetIdsFromFolders(teacher.lessons ?? []).forEach((assetId) => deletePdfAsset(assetId).catch((error) => {
+        console.warn('Failed to delete teacher pdf asset', error);
       }));
     }
     updateSubject(selectedSubject.id, (subject) => ({
@@ -2779,6 +2830,9 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
       collectVideoAssetIdsFromFolders([folder]).forEach((assetId) => deleteVideoAsset(assetId).catch((error) => {
         console.warn('Failed to delete folder video asset', error);
       }));
+      collectPdfAssetIdsFromFolders([folder]).forEach((assetId) => deletePdfAsset(assetId).catch((error) => {
+        console.warn('Failed to delete folder pdf asset', error);
+      }));
     }
     commitTree((tree) => removeFolderById(tree, folderId));
     setFolderPath((current) => current.filter((id) => id !== folderId));
@@ -2789,7 +2843,18 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
   }
 
   function openFolder(folder) {
+    logVideoStage('folder-opened', { folderId: folder.id, title: folder.title });
     setFolderPath((current) => [...current, folder.id]);
+  }
+
+  function selectVideo(video) {
+    logVideoStage('video-selected', {
+      lessonId: selectedFolder?.id ?? '',
+      videoId: video.id,
+      assetId: video.assetId ?? '',
+      sourceType: video.sourceType ?? 'url',
+    });
+    setViewState((current) => ({ ...current, videoId: video.id }));
   }
 
   function goToFolder(index) {
@@ -2814,7 +2879,7 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
               title: resourceForm.videoTitle.trim(),
               duration: resourceForm.videoDuration.trim() || '25 دقيقة',
               sourceType: isFile ? 'file' : 'url',
-              source: isFile ? videoAsset?.url ?? '' : resourceForm.videoUrl.trim(),
+              source: isFile ? '' : resourceForm.videoUrl.trim(),
               assetId: videoAsset?.id ?? '',
               fileName: videoAsset?.fileName ?? '',
               poster: folder.cover,
@@ -2827,6 +2892,7 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
     }
 
     if (type === 'pdf' && resourceForm.pdfTitle.trim()) {
+      const pdfAsset = resourceForm.pdfFile ? await savePdfAsset(resourceForm.pdfFile) : null;
       commitTree((tree) =>
         updateFolderById(tree, selectedFolder.id, (folder) => ({
           ...folder,
@@ -2837,11 +2903,13 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
               title: resourceForm.pdfTitle.trim(),
               pages: Number(resourceForm.pdfPages) || 10,
               summary: 'ملف مضاف من لوحة الأدمن.',
+              assetId: pdfAsset?.id ?? '',
+              fileName: pdfAsset?.fileName ?? resourceForm.pdfFileName,
             },
           ],
         })),
       );
-      setResourceForm((current) => ({ ...current, pdfTitle: '', pdfPages: '' }));
+      setResourceForm((current) => ({ ...current, pdfTitle: '', pdfPages: '', pdfFileName: '', pdfFile: null }));
     }
 
     if (type === 'exam' && examDraft.title.trim()) {
@@ -2872,6 +2940,12 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
         console.warn('Failed to delete lesson video asset', error);
       });
     }
+    if (type === 'pdfs') {
+      const pdf = selectedFolder.pdfs.find((item) => item.id === resourceId);
+      if (pdf?.assetId) deletePdfAsset(pdf.assetId).catch((error) => {
+        console.warn('Failed to delete lesson pdf asset', error);
+      });
+    }
     commitTree((tree) =>
       updateFolderById(tree, selectedFolder.id, (folder) => ({
         ...folder,
@@ -2887,6 +2961,15 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
       videoSourceType: 'file',
       videoFileName: file.name,
       videoFile: file,
+    }));
+  }
+
+  function handlePdfFile(file) {
+    if (!file) return;
+    setResourceForm((current) => ({
+      ...current,
+      pdfFileName: file.name,
+      pdfFile: file,
     }));
   }
 
@@ -2959,7 +3042,7 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
                 {selectedSubject.teachers.map((teacher) => (
                   <article className={`admin-teacher-card ${selectedTeacher?.id === teacher.id ? 'active' : ''}`} key={teacher.id}>
                     <button type="button" className="teacher-select-surface" onClick={() => { setTeacherId(teacher.id); setFolderPath([]); }}>
-                      <img src={teacher.image} alt={teacher.name} loading="lazy" />
+                      <img src={resolveMediaUrl(teacher.image)} alt={teacher.name} loading="lazy" />
                       <div>
                         <strong>{teacher.name}</strong>
                         <span>{countNestedFolders(teacher.lessons)} فولدر</span>
@@ -3096,8 +3179,10 @@ function LibraryPanelTree({ library, setLibrary, lessonCodes, setLessonCodes }) 
                   <div className="resource-admin-form">
                     <input value={resourceForm.pdfTitle} onChange={(e) => setResourceForm((c) => ({ ...c, pdfTitle: e.target.value }))} placeholder="اسم الملف" />
                     <input value={resourceForm.pdfPages} onChange={(e) => setResourceForm((c) => ({ ...c, pdfPages: e.target.value }))} placeholder="عدد الصفحات" />
+                    <input type="file" accept="application/pdf,.pdf" onChange={(e) => handlePdfFile(e.target.files?.[0] ?? null)} />
                     <button className="button button-primary" type="button" onClick={() => addResource('pdf')}>إضافة PDF</button>
                   </div>
+                  {resourceForm.pdfFileName && <p className="muted">الملف المختار: {resourceForm.pdfFileName}</p>}
                   <div className="table-list">
                     {selectedFolder.pdfs.map((pdf) => (
                       <article className="data-row" key={pdf.id}>
@@ -3255,10 +3340,17 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
     folderTrail.push(folder);
     walker = folder.children;
   }
-  const selectedExam = selectedFolder?.exams.find((exam) => exam.id === viewState.examId) ?? null;
+  const lessonExams = useMemo(
+    () => (selectedFolder?.exams ?? []).map((exam) => ensureExamQuestionsData(exam)).filter(Boolean),
+    [selectedFolder],
+  );
+  const selectedExam = lessonExams.find((exam) => exam.id === viewState.examId) ?? null;
   const selectedVideo = selectedFolder?.videos.find((video) => video.id === viewState.videoId) ?? selectedFolder?.videos[0] ?? null;
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const isLessonUnlocked = selectedFolder ? lessonAccess.some((item) => item.lessonId === selectedFolder.id || item.folderId === selectedFolder.id) : false;
+  const effectiveVideoSource = selectedVideo?.sourceType === 'file'
+    ? resolvedVideoSource
+    : (resolvedVideoSource || selectedVideo?.source || '');
 
   useEffect(() => {
     setViewState({ screen: 'subjects', subjectId: '', teacherId: '', folderPath: [], videoId: '', examId: '' });
@@ -3286,10 +3378,10 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
   }, [studentToken]);
 
   useEffect(() => {
-    if (selectedVideo?.sourceType !== 'file' && (resolvedVideoSource || selectedVideo?.source) && videoPlayerRef.current) {
+    if (selectedVideo?.sourceType !== 'file' && effectiveVideoSource && videoPlayerRef.current) {
       videoPlayerRef.current.play?.().catch(() => {});
     }
-  }, [selectedVideo?.id, selectedVideo?.source, selectedVideo?.sourceType, resolvedVideoSource]);
+  }, [selectedVideo?.id, selectedVideo?.sourceType, effectiveVideoSource]);
 
   useEffect(() => {
     let objectUrl = '';
@@ -3297,19 +3389,56 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
 
     async function resolveSource() {
       if (!selectedVideo) {
+        logVideoStage('lesson-selected', { lessonId: selectedFolder?.id ?? '', videoId: '', assetId: '' });
         setResolvedVideoSource('');
         return;
       }
 
+      logVideoStage('lesson-selected', {
+        lessonId: selectedFolder?.id ?? '',
+        videoId: selectedVideo.id,
+        assetId: selectedVideo.assetId ?? '',
+        sourceType: selectedVideo.sourceType ?? 'url',
+      });
+
       if (selectedVideo.sourceType === 'file' && selectedVideo.assetId) {
         try {
+          logVideoStage('asset-found', {
+            lessonId: selectedFolder?.id ?? '',
+            videoId: selectedVideo.id,
+            assetId: selectedVideo.assetId,
+          });
           const access = await requestVideoAccess(selectedVideo.assetId);
-          if (!cancelled) setResolvedVideoSource(access.url);
+          if (!cancelled) {
+            logVideoStage('video-url-generated', {
+              lessonId: selectedFolder?.id ?? '',
+              videoId: selectedVideo.id,
+              assetId: selectedVideo.assetId,
+              url: access.url,
+            });
+            setResolvedVideoSource(access.url);
+          }
           return;
-        } catch {
+        } catch (error) {
+          logVideoStage('ticket-request-failed', {
+            lessonId: selectedFolder?.id ?? '',
+            videoId: selectedVideo.id,
+            assetId: selectedVideo.assetId,
+            error: error instanceof Error ? error.message : String(error),
+          });
           const asset = await loadVideoAsset(selectedVideo.assetId);
-          if (!asset || cancelled) return;
+          if (!asset || cancelled) {
+            setResolvedVideoSource('');
+            return;
+          }
           objectUrl = URL.createObjectURL(asset.blob);
+          logVideoStage('video-url-generated', {
+            lessonId: selectedFolder?.id ?? '',
+            videoId: selectedVideo.id,
+            assetId: selectedVideo.assetId,
+            url: objectUrl,
+            fallback: true,
+          });
           setResolvedVideoSource(objectUrl);
           return;
         }
@@ -3320,18 +3449,24 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
 
     resolveSource().catch((error) => {
       console.warn('Failed to resolve remote video source', error);
-      setResolvedVideoSource(selectedVideo?.source ?? '');
+      logVideoStage('source-resolution-failed', {
+        lessonId: selectedFolder?.id ?? '',
+        videoId: selectedVideo?.id ?? '',
+        assetId: selectedVideo?.assetId ?? '',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      setResolvedVideoSource(selectedVideo?.sourceType === 'file' ? '' : (selectedVideo?.source ?? ''));
     });
 
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [selectedVideo?.id, selectedVideo?.source, selectedVideo?.sourceType, selectedVideo?.assetId, studentToken]);
+  }, [selectedVideo?.id, selectedVideo?.source, selectedVideo?.sourceType, selectedVideo?.assetId, studentToken, selectedFolder?.id]);
 
   useEffect(() => {
     const video = videoPlayerRef.current;
-    const source = resolvedVideoSource || selectedVideo?.source || '';
+    const source = effectiveVideoSource;
     if (!video || !source || !source.endsWith('.m3u8')) return undefined;
 
     if (video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -3347,39 +3482,7 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
     return () => {
       hls.destroy();
     };
-  }, [selectedVideo?.id, selectedVideo?.source, resolvedVideoSource]);
-
-  useEffect(() => {
-    let objectUrl = '';
-    let cancelled = false;
-
-    async function resolveSource() {
-      if (!selectedVideo) {
-        setResolvedVideoSource('');
-        return;
-      }
-
-      if (selectedVideo.sourceType === 'file' && selectedVideo.assetId) {
-        const asset = await loadVideoAsset(selectedVideo.assetId);
-        if (!asset || cancelled) return;
-        objectUrl = URL.createObjectURL(asset.blob);
-        setResolvedVideoSource(objectUrl);
-        return;
-      }
-
-      setResolvedVideoSource(selectedVideo.source ?? '');
-    }
-
-    resolveSource().catch((error) => {
-      console.warn('Failed to resolve local video source', error);
-      setResolvedVideoSource(selectedVideo?.source ?? '');
-    });
-
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [selectedVideo?.id, selectedVideo?.sourceType, selectedVideo?.assetId, selectedVideo?.source]);
+  }, [effectiveVideoSource, selectedVideo?.id]);
 
   useEffect(() => {
     setIsVideoPlaying(false);
@@ -3406,6 +3509,13 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
   }, []);
 
   function navigate(nextViewState) {
+    if (nextViewState.screen === 'exam') {
+      logExamStage('route-navigation', {
+        lessonId: selectedFolder?.id ?? '',
+        examId: nextViewState.examId ?? '',
+        screen: nextViewState.screen,
+      });
+    }
     window.history.pushState({ thanwyaStudent: true, viewState: nextViewState }, '', window.location.href);
     setViewState(nextViewState);
   }
@@ -3427,6 +3537,7 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
   }
 
   function openFolder(folder) {
+    logVideoStage('folder-opened', { folderId: folder.id, title: folder.title });
     const nextPath = [...viewState.folderPath, folder.id];
     navigate({ ...viewState, screen: 'folder', folderPath: nextPath, videoId: '', examId: '' });
     setExamAnswers({});
@@ -3436,7 +3547,38 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
   }
 
   function selectVideo(video) {
+    logVideoStage('video-selected', {
+      lessonId: selectedFolder?.id ?? '',
+      videoId: video.id,
+      assetId: video.assetId ?? '',
+      sourceType: video.sourceType ?? 'url',
+    });
     navigate({ ...viewState, videoId: video.id });
+  }
+
+  async function openPdf(pdf) {
+    logExamStage('pdf-open-requested', {
+      lessonId: selectedFolder?.id ?? '',
+      pdfId: pdf?.id ?? '',
+      assetId: pdf?.assetId ?? '',
+    });
+
+    if (!pdf?.assetId) {
+      console.warn('[pdf-flow] missing-asset', {
+        lessonId: selectedFolder?.id ?? '',
+        pdfId: pdf?.id ?? '',
+      });
+      return;
+    }
+
+    const access = await requestPdfAccess(pdf.assetId);
+    console.info('[pdf-flow] access-response', {
+      lessonId: selectedFolder?.id ?? '',
+      pdfId: pdf.id,
+      assetId: pdf.assetId,
+      url: access.url,
+    });
+    window.open(access.url, '_blank', 'noopener,noreferrer');
   }
 
   async function unlockLesson(folder, codeValue) {
@@ -3459,7 +3601,12 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
   }
 
   function openExam(exam) {
-
+    const runtimeExam = ensureExamQuestionsData(exam);
+    logExamStage('exam-button-clicked', {
+      lessonId: selectedFolder?.id ?? '',
+      examId: runtimeExam?.id ?? '',
+      questionCount: runtimeExam?.questionsData?.length ?? 0,
+    });
     navigate({ ...viewState, screen: 'exam', examId: exam.id, videoId: '' });
     setExamAnswers({});
     setExamResult(null);
@@ -3470,8 +3617,26 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
   }
 
   function submitExamAnswers(exam) {
+    logExamStage('exam-submitted', {
+      lessonId: selectedFolder?.id ?? '',
+      examId: exam?.id ?? '',
+      answered: Object.keys(examAnswers).length,
+      total: ensureExamQuestionsData(exam)?.questionsData?.length ?? 0,
+    });
     setExamResult(gradeAnswers(exam, examAnswers));
   }
+
+  useEffect(() => {
+    if (viewState.screen !== 'exam') return;
+
+    logExamStage('exam-screen-resolved', {
+      lessonId: selectedFolder?.id ?? '',
+      examId: viewState.examId ?? '',
+      found: Boolean(selectedExam),
+      questionCount: selectedExam?.questionsData?.length ?? 0,
+      source: 'library-state',
+    });
+  }, [selectedExam, selectedFolder?.id, viewState.examId, viewState.screen]);
 
   function goBack() {
     window.history.back();
@@ -3526,7 +3691,7 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
           <div className="collection-grid teacher-mode">
             {selectedSubject.teachers.map((teacher) => (
               <article className="collection-card teacher-showcase-card" key={teacher.id}>
-                <div className="collection-cover portrait"><img src={teacher.image} alt={teacher.name} loading="lazy" /><span className="collection-badge">مدرس</span></div>
+                <div className="collection-cover portrait"><img src={resolveMediaUrl(teacher.image)} alt={teacher.name} loading="lazy" /><span className="collection-badge">مدرس</span></div>
                 <div className="collection-content">
                   <h3>{teacher.name}</h3>
                   <p>{teacher.role}</p>
@@ -3592,7 +3757,7 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
               <div className="lesson-main-panel">
                 <article className="player-preview-card">
                   <div className="player-stage">
-                    {resolvedVideoSource || selectedVideo?.source ? (
+                    {effectiveVideoSource ? (
                       <>
                         <div className={`video-watermark ${isVideoPlaying ? 'is-visible' : ''}`} aria-hidden="true">
                           <span>{profile.name}</span>
@@ -3605,9 +3770,17 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
                           controls
                           autoPlay
                           playsInline
-                          src={resolvedVideoSource || selectedVideo.source}
+                          src={effectiveVideoSource}
                           poster={selectedVideo.poster}
-                          onPlay={() => setIsVideoPlaying(true)}
+                          onPlay={() => {
+                            logVideoStage('playback-started', {
+                              lessonId: selectedFolder?.id ?? '',
+                              videoId: selectedVideo.id,
+                              assetId: selectedVideo.assetId ?? '',
+                              source: effectiveVideoSource,
+                            });
+                            setIsVideoPlaying(true);
+                          }}
                           onPause={() => setIsVideoPlaying(false)}
                           onEnded={() => setIsVideoPlaying(false)}
                         />
@@ -3619,7 +3792,7 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
                   <div className="player-copy">
                     <h3>{selectedVideo?.title ?? selectedFolder.title}</h3>
                     <p>{selectedVideo?.summary ?? selectedFolder.subtitle}</p>
-                    {!resolvedVideoSource && !selectedVideo?.source && <span className="muted">الفيديو ده ملوش مصدر تشغيل بعد.</span>}
+                    {!effectiveVideoSource && <span className="muted">الفيديو ده ملوش مصدر تشغيل بعد.</span>}
                   </div>
                 </article>
                 <div className="detail-card">
@@ -3634,9 +3807,25 @@ function StudentDashboardTree({ profile, library, setLibrary, accessRecords = []
                   </div>
                 </div>
                 <div className="detail-card">
-                  <div className="detail-card-heading"><h3>الامتحانات</h3><span>{selectedFolder.exams.length} امتحان</span></div>
+                  <div className="detail-card-heading"><h3>ملفات PDF</h3><span>{selectedFolder.pdfs.length} ملف</span></div>
                   <div className="detail-exam-grid">
-                    {selectedFolder.exams.map((exam) => (
+                    {selectedFolder.pdfs.map((pdf) => (
+                      <article className="detail-exam-item" key={pdf.id}>
+                        <div>
+                          <strong>{pdf.title}</strong>
+                          <span>{`${pdf.pages} صفحة`}</span>
+                        </div>
+                        <button className="button collection-button compact" type="button" onClick={() => openPdf(pdf)} disabled={!pdf.assetId}>
+                          فتح الملف
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+                <div className="detail-card">
+                  <div className="detail-card-heading"><h3>الامتحانات</h3><span>{lessonExams.length} امتحان</span></div>
+                  <div className="detail-exam-grid">
+                    {lessonExams.map((exam) => (
                       <article className="detail-exam-item" key={exam.id}>
                         <div>
                           <strong>{exam.title}</strong>
