@@ -1,0 +1,103 @@
+
+> thanwya-platform@0.1.0 dev:full
+> concurrently -n api,web -c cyan,magenta "npm run api" "npm run dev"
+
+[api] 
+[api] > thanwya-platform@0.1.0 api
+[api] > node server/index.js
+[api] 
+[web] 
+[web] > thanwya-platform@0.1.0 dev
+[web] > vite --host 127.0.0.1
+[web] 
+[api] Thanwya API running on http://127.0.0.1:3001
+[web] 
+[web]   [32m[1mVITE[22m v7.3.5[39m  [2mready in [0m[1m352[22m[2m[0m ms[22m
+[web] 
+[web]   [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5173[22m/[39m
+[web] [2m10:39:01 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:39:26 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:41:23 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:41:33 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:41:52 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:42:37 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:42:44 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:47:52 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:50:41 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:50:47 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:51:18 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[web] [2m10:52:40 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[web] [2m10:52:49 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[web] [2m10:58:11 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:58:28 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m10:59:49 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:00:22 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:00:32 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:00:47 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:01:17 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:01:30 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[web] [2m11:02:55 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:33:18 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:37:15 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:37:43 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:38:04 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:38:17 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:38:29 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:39:11 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:40:28 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:40:37 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:42:15 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:43:01 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:43:16 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:44:47 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:46:18 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:46:44 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:46:44 AM[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [33mwarning: [33mThe character "}" is not valid inside a JSX element[33m
+[web] 3470 |                </div>
+[web] 3471 |                {lessonAccessError && <p className="error-text">{lessonAccessError}</p>}
+[web] 3472 |                <p className="muted">??? ??? ???????? ????? ????? ?????? ??? ?????? ??.</p>}
+[web]      |                                                                                           ^
+[web] 3473 |              </div> :
+[web] 3474 |  
+[web] [39m
+[web]   Plugin: [35mvite:esbuild[39m
+[web]   File: [36mD:/شغل اونلاين/THANWYA/src/App.jsx[39m
+[web] [2m11:47:22 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:47:41 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:47:41 AM[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [33mwarning: [33mThe character "}" is not valid inside a JSX element[33m
+[web] 3475 |                </div>
+[web] 3476 |                {lessonAccessError && <p className="error-text">{lessonAccessError}</p>}
+[web] 3477 |                <p className="muted">??? ??? ???????? ????? ????? ?????? ??? ?????? ??.</p>}
+[web]      |                                                                                           ^
+[web] 3478 |              </div> :
+[web] 3479 |  
+[web] [39m
+[web]   Plugin: [35mvite:esbuild[39m
+[web]   File: [36mD:/شغل اونلاين/THANWYA/src/App.jsx[39m
+[web] [2m11:48:34 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:48:54 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:49:02 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:49:33 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[web] [2m11:53:48 AM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[api] SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+[api]     at JSON.parse (<anonymous>)
+[api]     at parse (D:\شغل اونلاين\THANWYA\node_modules\body-parser\lib\types\json.js:72:19)
+[api]     at D:\شغل اونلاين\THANWYA\node_modules\body-parser\lib\read.js:162:18
+[api]     at AsyncResource.runInAsyncScope (node:async_hooks:227:14)
+[api]     at invokeCallback (D:\شغل اونلاين\THANWYA\node_modules\raw-body\index.js:238:16)
+[api]     at done (D:\شغل اونلاين\THANWYA\node_modules\raw-body\index.js:227:7)
+[api]     at IncomingMessage.onEnd (D:\شغل اونلاين\THANWYA\node_modules\raw-body\index.js:287:7)
+[api]     at IncomingMessage.emit (node:events:509:28)
+[api]     at endReadableNT (node:internal/streams/readable:1735:12)
+[api]     at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+[api] SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+[api]     at JSON.parse (<anonymous>)
+[api]     at parse (D:\شغل اونلاين\THANWYA\node_modules\body-parser\lib\types\json.js:72:19)
+[api]     at D:\شغل اونلاين\THANWYA\node_modules\body-parser\lib\read.js:162:18
+[api]     at AsyncResource.runInAsyncScope (node:async_hooks:227:14)
+[api]     at invokeCallback (D:\شغل اونلاين\THANWYA\node_modules\raw-body\index.js:238:16)
+[api]     at done (D:\شغل اونلاين\THANWYA\node_modules\raw-body\index.js:227:7)
+[api]     at IncomingMessage.onEnd (D:\شغل اونلاين\THANWYA\node_modules\raw-body\index.js:287:7)
+[api]     at IncomingMessage.emit (node:events:509:28)
+[api]     at endReadableNT (node:internal/streams/readable:1735:12)
+[api]     at process.processTicksAndRejections (node:internal/process/task_queues:90:21)

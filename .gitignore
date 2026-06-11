@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.next-dev-logs/
+.next-start-logs/
+.vscode/
+
+.env
+.env.*
+dist/
+.vite/
+
+npm-debug.log*

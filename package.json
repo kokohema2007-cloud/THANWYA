@@ -1,0 +1,27 @@
+{
+  "name": "thanwya-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "api": "node server/index.js",
+    "start": "node server/index.js",
+    "dev:full": "concurrently -n api,web -c cyan,magenta \"npm run api\" \"npm run dev\"",
+    "build": "vite build",
+    "test": "node tests/smoke.mjs",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^10.0.3",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "hls.js": "^1.6.16",
+    "lucide-react": "^0.542.0",
+    "multer": "^2.1.1",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "vite": "^7.1.4"
+  }
+}

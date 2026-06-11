@@ -1,0 +1,36 @@
+export const LOCAL_TEACHER_IMAGES = {
+  '3abkry lo8a': '/teacher-images/3abkry lo8a.png',
+  abdlgwad: '/teacher-images/Abdlgwad.png',
+  'abdlhamed hamed': '/teacher-images/Abdlhamed hamed.png',
+  abdlma3bod: '/teacher-images/Abdlma3bod.png',
+  'ahmed 3sam': '/teacher-images/Ahmed 3sam.png',
+  'ahmed adel almoar5': '/teacher-images/Ahmed adel almoar5.png',
+  'ahmed rdwan': '/teacher-images/Ahmed rdwan.png',
+  'ahmed zhran': '/teacher-images/Ahmed zhran.png',
+  'al5dawy ebrahim': '/teacher-images/Al5dawy ebrahim.png',
+  algohary: '/teacher-images/Algohary.png',
+  'ashraf elshenawy': '/teacher-images/Ashraf ElShenawy.png',
+  daif: '/teacher-images/Daif.png',
+  englshawy: '/teacher-images/Englshawy.png',
+  'gom3a alsyd': '/teacher-images/Gom3a alsyd.png',
+  'joseph adel': '/teacher-images/joseph-adel.png',
+  'kaled sakr': '/teacher-images/kaled sakr.png',
+  kelany: '/teacher-images/kelany.png',
+  kerolos: '/teacher-images/Kerolos.png',
+  'lotfy zhran': '/teacher-images/lotfy zhran.png',
+  'mahmoud magdy': '/teacher-images/Mahmoud magdy.png',
+  'mohamed adel': '/teacher-images/mohamed adel.png',
+  'mohamed aymen': '/teacher-images/Mohamed aymen.png',
+  'mohamed salah': '/teacher-images/Mohamed salah.png',
+  'mrs mai': '/teacher-images/Mrs mai.png',
+  'naser albatal': '/teacher-images/Naser albatal.png',
+  'omar raia': '/teacher-images/omar raia.png',
+  'reda al farouk': '/teacher-images/Reda al farouk.png',
+  sherbeni: '/teacher-images/Sherbeni.png',
+  'shreef almasry': '/teacher-images/Shreef almasry.png',
+  'tamer alkady': '/teacher-images/tamer alkady.png',
+};
+
+export function localTeacherImageFor(name) {
+  return LOCAL_TEACHER_IMAGES[name?.trim().toLowerCase()] ?? null;
+}
